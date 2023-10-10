@@ -1,93 +1,185 @@
-use std::{cell::RefCell, collections::HashMap, marker::PhantomData};
-
 use halo2_base::{
     gates::{
-        builder::{CircuitBuilderStage, FlexGateConfigParams, MultiPhaseThreadBreakPoints},
-        range::{RangeConfig, RangeStrategy},
+        circuit::{BaseCircuitParams, BaseConfig, CircuitBuilderStage, MaybeRangeConfig},
+        flex_gate::{
+            threads::SinglePhaseCoreManager, FlexGateConfigParams, MultiPhaseThreadBreakPoints,
+        },
+        RangeChip,
     },
-    utils::ScalarField,
-    SKIP_FIRST_PASS,
     halo2_proofs::{
-        circuit::{self, Layouter, SimpleFloorPlanner},
+        circuit::{Layouter, SimpleFloorPlanner},
         plonk::{Circuit, ConstraintSystem, Error},
-    }
+    },
+    utils::BigPrimeField,
+    virtual_region::{lookups::LookupAnyManager, manager::VirtualRegionManager},
+    AssignedValue, Context,
 };
 
 use crate::{gate::ShaThreadBuilder, spread::SpreadConfig};
 
+const MAX_PHASE: usize = 3;
+
 #[derive(Debug, Clone)]
-pub struct SHAConfig<F: ScalarField> {
+pub struct SHAConfig<F: BigPrimeField> {
     pub compression: SpreadConfig<F>,
-    pub range: RangeConfig<F>,
+    pub base: BaseConfig<F>,
 }
 
-impl<F: ScalarField> SHAConfig<F> {
-    pub fn configure(meta: &mut ConstraintSystem<F>, params: FlexGateConfigParams) -> Self {
+impl<F: BigPrimeField> SHAConfig<F> {
+    pub fn configure(meta: &mut ConstraintSystem<F>, params: BaseCircuitParams) -> Self {
         let degree = params.k;
-        let mut range = RangeConfig::configure(
-            meta,
-            RangeStrategy::Vertical,
-            &params.num_advice_per_phase,
-            &params.num_lookup_advice_per_phase,
-            params.num_fixed,
-            params.k - 1,
-            degree,
-        );
+        let mut base = BaseConfig::configure(meta, params);
         let compression = SpreadConfig::configure(meta, 8, 1);
 
-        range.gate.max_rows = (1 << degree) - meta.minimum_rows();
-        Self { range, compression }
+        // base.gate.max_rows = (1 << degree) - meta.minimum_rows();
+        Self { base, compression }
     }
 }
 
-pub struct ShaCircuitBuilder<F: ScalarField> {
-    pub builder: RefCell<ShaThreadBuilder<F>>,
-    pub break_points: RefCell<MultiPhaseThreadBreakPoints>, // `RefCell` allows the circuit to record break points in a keygen call of `synthesize` for use in later witness gen
-    _f: PhantomData<F>,
+pub struct ShaCircuitBuilder<F: BigPrimeField> {
+    // pub builder: RefCell<ShaThreadBuilder<F>>,
+    pub core: ShaThreadBuilder<F>,
+    // pub break_points: RefCell<MultiPhaseThreadBreakPoints>, // `RefCell` allows the circuit to record break points in a keygen call of `synthesize` for use in later witness gen
+    /// The range lookup manager
+    pub(super) lookup_manager: [LookupAnyManager<F, 1>; MAX_PHASE],
+    /// Configuration parameters for the circuit shape
+    pub config_params: BaseCircuitParams,
+    /// The assigned instances to expose publicly at the end of circuit synthesis
+    pub assigned_instances: Vec<Vec<AssignedValue<F>>>,
 }
 
-impl<F: ScalarField> ShaCircuitBuilder<F> {
-    pub fn new(
-        builder: ShaThreadBuilder<F>,
-        break_points: Option<MultiPhaseThreadBreakPoints>,
-    ) -> Self {
+impl<F: BigPrimeField> ShaCircuitBuilder<F> {
+    pub fn new(witness_gen_only: bool) -> Self {
+        let core = ShaThreadBuilder::new(witness_gen_only);
+        let lookup_manager =
+            [(); MAX_PHASE].map(|_| LookupAnyManager::new(witness_gen_only, core.copy_manager()));
         Self {
-            builder: RefCell::new(builder),
-            break_points: RefCell::new(break_points.unwrap_or_default()),
-            _f: PhantomData,
+            core,
+            lookup_manager,
+            assigned_instances: vec![],
+            config_params: BaseCircuitParams::default(),
         }
     }
 
-    pub fn from_stage(
-        builder: ShaThreadBuilder<F>,
-        break_points: Option<MultiPhaseThreadBreakPoints>,
-        stage: CircuitBuilderStage,
-    ) -> Self {
-        Self::new(
-            builder.unknown(stage == CircuitBuilderStage::Keygen),
-            break_points,
-        )
+    pub fn from_stage(stage: CircuitBuilderStage) -> Self {
+        Self::new(stage == CircuitBuilderStage::Prover)
+            .unknown(stage == CircuitBuilderStage::Keygen)
+    }
+
+    pub fn unknown(mut self, use_unknown: bool) -> Self {
+        self.core = self.core.unknown(use_unknown);
+        self
     }
 
     /// Creates a new [ShaCircuitBuilder] with `use_unknown` of [ShaThreadBuilder] set to true.
-    pub fn keygen(builder: ShaThreadBuilder<F>) -> Self {
-        Self::new(builder.unknown(true), None)
+    pub fn keygen() -> Self {
+        Self::from_stage(CircuitBuilderStage::Keygen)
     }
 
     /// Creates a new [ShaCircuitBuilder] with `use_unknown` of [GateThreadBuilder] set to false.
-    pub fn mock(builder: ShaThreadBuilder<F>) -> Self {
-        Self::new(builder.unknown(false), None)
+    pub fn mock() -> Self {
+        Self::from_stage(CircuitBuilderStage::Mock)
     }
 
     /// Creates a new [ShaCircuitBuilder].
-    pub fn prover(builder: ShaThreadBuilder<F>, break_points: MultiPhaseThreadBreakPoints) -> Self {
-        Self::new(builder.unknown(false), Some(break_points))
+    pub fn prover() -> Self {
+        Self::from_stage(CircuitBuilderStage::Prover)
     }
 
-    pub fn config(&self, k: usize, minimum_rows: Option<usize>) -> FlexGateConfigParams {
+    /// The log_2 size of the lookup table, if using.
+    pub fn lookup_bits(&self) -> Option<usize> {
+        self.config_params.lookup_bits
+    }
+
+    /// Set lookup bits
+    pub fn set_lookup_bits(&mut self, lookup_bits: usize) {
+        self.config_params.lookup_bits = Some(lookup_bits);
+    }
+
+    /// Returns new with lookup bits
+    pub fn use_lookup_bits(mut self, lookup_bits: usize) -> Self {
+        self.set_lookup_bits(lookup_bits);
+        self
+    }
+
+    /// Sets new `k` = log2 of domain
+    pub fn set_k(&mut self, k: usize) {
+        self.config_params.k = k;
+    }
+
+    /// Returns new with `k` set
+    pub fn use_k(mut self, k: usize) -> Self {
+        self.set_k(k);
+        self
+    }
+
+    /// Set config params
+    pub fn set_params(&mut self, params: BaseCircuitParams) {
+        self.config_params = params;
+    }
+
+    /// Returns new with config params
+    pub fn use_params(mut self, params: BaseCircuitParams) -> Self {
+        self.set_params(params);
+        self
+    }
+
+    pub fn core_mut(&mut self) -> &mut ShaThreadBuilder<F> {
+        &mut self.core
+    }
+
+    /// Returns a mutable reference to the [Context] of a gate thread. Spawns a new thread for the given phase, if none exists.
+    /// * `phase`: The challenge phase (as an index) of the gate thread.
+    pub fn main(&mut self) -> &mut Context<F> {
+        self.core.main()
+    }
+
+    /// Returns [SinglePhaseCoreManager] with the virtual region with all core threads in the given phase.
+    pub fn pool(&mut self, phase: usize) -> &mut SinglePhaseCoreManager<F> {
+        self.core.core.phase_manager.get_mut(phase).unwrap()
+    }
+
+    fn total_lookup_advice_per_phase(&self) -> Vec<usize> {
+        self.lookup_manager
+            .iter()
+            .map(|lm| lm.total_rows())
+            .collect()
+    }
+
+    pub fn calculate_params(&mut self, minimum_rows: Option<usize>) -> BaseCircuitParams {
+        let k = self.config_params.k;
+        let ni = self.config_params.num_instance_columns;
+        let max_rows = (1 << k) - minimum_rows.unwrap_or(0);
+
         // clone everything so we don't alter the circuit in any way for later calls
-        let mut builder = self.builder.borrow().clone();
-        builder.config(k, minimum_rows)
+        let gate_params = self.core.clone().calculate_params(k, minimum_rows);
+
+        let total_lookup_advice_per_phase = self.total_lookup_advice_per_phase();
+        let num_lookup_advice_per_phase = total_lookup_advice_per_phase
+            .iter()
+            .map(|count| (count + max_rows - 1) / max_rows)
+            .collect::<Vec<_>>();
+
+        let params = BaseCircuitParams {
+            k: gate_params.k,
+            num_advice_per_phase: gate_params.num_advice_per_phase,
+            num_fixed: gate_params.num_fixed,
+            num_lookup_advice_per_phase,
+            lookup_bits: self.lookup_bits(),
+            num_instance_columns: ni,
+        };
+
+        self.config_params = params.clone();
+        #[cfg(feature = "display")]
+        {
+            println!("Total range check advice cells to lookup per phase: {total_lookup_advice_per_phase:?}");
+            log::info!("Auto-calculated config params:\n {params:#?}");
+        }
+        params
+    }
+
+    pub fn range_chip(&self, lookup_bits: usize) -> RangeChip<F> {
+        RangeChip::new(lookup_bits, self.lookup_manager.clone())
     }
 
     // re-usable function for synthesize
@@ -96,71 +188,75 @@ impl<F: ScalarField> ShaCircuitBuilder<F> {
         &self,
         config: &SHAConfig<F>,
         layouter: &mut impl Layouter<F>,
-    ) -> Result<HashMap<(usize, usize), (circuit::Cell, usize)>, Error> {
-        config
-            .range
-            .load_lookup_table(layouter)
-            .expect("load range lookup table");
+    ) -> Result<(), Error> {
+        if let MaybeRangeConfig::WithRange(config) = &config.base.base {
+            config
+                .load_lookup_table(layouter)
+                .expect("load lookup table should not fail");
+        }
 
-        let mut first_pass = SKIP_FIRST_PASS;
-        let witness_gen_only = self.builder.borrow().witness_gen_only();
+        // let mut first_pass = SKIP_FIRST_PASS;
+        // let witness_gen_only = self.builder.borrow().witness_gen_only();
 
-        let mut assigned_advices = HashMap::new();
+        // let mut assigned_advices = HashMap::new();
 
         config.compression.load(layouter)?;
 
         layouter.assign_region(
             || "ShaCircuitBuilder generated circuit",
             |mut region| {
-                if first_pass {
-                    first_pass = false;
-                    return Ok(());
+                // if first_pass {
+                //     first_pass = false;
+                //     return Ok(());
+                // }
+
+                let usable_rows = config.base.gate().max_rows;
+                self.core.assign_raw(
+                    &(
+                        config.base.gate().basic_gates[0].clone(),
+                        config.compression.clone(),
+                        usable_rows,
+                    ),
+                    &mut region,
+                );
+
+                // Only assign cells to lookup if we're sure we're doing range lookups
+                if let MaybeRangeConfig::WithRange(config) = &config.base {
+                    self.assign_lookups_in_phase(config, &mut region, 0);
                 }
 
-                if !witness_gen_only {
-                    let mut builder = self.builder.borrow().clone();
-
-                    let assignments = builder.assign_all(
-                        &config.range.gate,
-                        &config.range.lookup_advice,
-                        &config.range.q_lookup,
-                        &config.compression,
-                        &mut region,
-                        Default::default(),
-                    )?;
-                    *self.break_points.borrow_mut() = assignments.break_points.clone();
-                    assigned_advices = assignments.assigned_advices;
-                } else {
-                    let builder = &mut self.builder.borrow_mut();
-                    let break_points = &mut self.break_points.borrow_mut();
-
-                    builder.assign_witnesses(
-                        &config.range.gate,
-                        &config.range.lookup_advice,
-                        &config.compression,
-                        &mut region,
-                        break_points,
-                    )?;
+                // Impose equality constraints
+                if !self.core.witness_gen_only() {
+                    self.core
+                        .copy_manager()
+                        .assign_raw(config.base.constants(), &mut region);
                 }
                 Ok(())
             },
         )?;
-        Ok(assigned_advices)
+        Ok(())
     }
 }
 
-impl<F: ScalarField> Circuit<F> for ShaCircuitBuilder<F> {
+impl<F: BigPrimeField> Circuit<F> for ShaCircuitBuilder<F> {
     type Config = SHAConfig<F>;
     type FloorPlanner = SimpleFloorPlanner;
+    type Params = BaseCircuitParams;
+
+    fn params(&self) -> Self::Params {
+        self.config_params.clone()
+    }
 
     fn without_witnesses(&self) -> Self {
         unimplemented!()
     }
 
-    fn configure(meta: &mut ConstraintSystem<F>) -> SHAConfig<F> {
-        let params: FlexGateConfigParams =
-            serde_json::from_str(&std::env::var("FLEX_GATE_CONFIG_PARAMS").unwrap()).unwrap();
+    fn configure_with_params(meta: &mut ConstraintSystem<F>, params: Self::Params) -> Self::Config {
         SHAConfig::configure(meta, params)
+    }
+
+    fn configure(meta: &mut ConstraintSystem<F>) -> SHAConfig<F> {
+        unreachable!("You must use configure_with_params");
     }
 
     fn synthesize(

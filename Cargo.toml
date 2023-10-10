@@ -8,7 +8,7 @@ description = "SHA256 verification circuit in halo2 supporting dynamic length in
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib", tag = "v0.3.0-ce", default-features = false, features = [
+halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib", branch = "community-edition", default-features = false, features = [
     "halo2-pse",
     "display",
 ] }

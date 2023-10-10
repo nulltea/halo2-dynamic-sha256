@@ -1,19 +1,15 @@
-use std::{collections::HashMap, mem};
-
 use halo2_base::{
     gates::{
-        builder::{
-            assign_threads_in, CircuitBuilderStage, FlexGateConfigParams, GateThreadBuilder,
-            KeygenAssignments, MultiPhaseThreadBreakPoints,
-        },
-        flex_gate::FlexGateConfig,
+        circuit::{CircuitBuilderStage, BaseCircuitParams},
+        flex_gate::{threads::MultiPhaseCoreManager, BasicGateConfig, FlexGateConfigParams}, RangeChip,
     },
-    halo2_proofs::{
-        circuit::{self, Region, Value},
-        plonk::{Advice, Column, Error, Selector},
+    halo2_proofs::circuit::{Region, Value},
+    utils::BigPrimeField,
+    virtual_region::{
+        copy_constraints::{CopyConstraintManager, SharedCopyConstraintManager},
+        manager::VirtualRegionManager,
     },
-    utils::ScalarField,
-    Context,
+    Context, ContextCell,
 };
 use itertools::Itertools;
 
@@ -22,23 +18,23 @@ use super::SpreadConfig;
 pub const FIRST_PHASE: usize = 0;
 
 #[derive(Clone, Debug, Default)]
-pub struct ShaThreadBuilder<F: ScalarField> {
+pub struct ShaThreadBuilder<F: BigPrimeField> {
     /// Threads for spread table assignment.
     pub threads_dense: Vec<Context<F>>,
     /// Threads for spread table assignment.
     pub threads_spread: Vec<Context<F>>,
-    /// [`GateThreadBuilder`] with threads for basic gate; also in charge of thread IDs
-    pub gate_builder: GateThreadBuilder<F>,
+    /// [`SinglePhaseCoreManager`] with threads for basic gate; also in charge of thread IDs
+    pub core: MultiPhaseCoreManager<F>,
 }
 
 pub type ShaContexts<'a, F> = (&'a mut Context<F>, &'a mut Context<F>);
 
-impl<F: ScalarField> ShaThreadBuilder<F> {
+impl<F: BigPrimeField> ShaThreadBuilder<F> {
     pub fn new(witness_gen_only: bool) -> Self {
         Self {
             threads_spread: Vec::new(),
             threads_dense: Vec::new(),
-            gate_builder: GateThreadBuilder::new(witness_gen_only),
+            core: MultiPhaseCoreManager::new(witness_gen_only),
         }
     }
 
@@ -59,119 +55,92 @@ impl<F: ScalarField> ShaThreadBuilder<F> {
             .unknown(stage == CircuitBuilderStage::Keygen)
     }
 
+    pub fn copy_manager(&self) -> SharedCopyConstraintManager<F> {
+        self.core.copy_manager.clone()
+    }
+
+    /// Returns `self` with a given copy manager
+    pub fn use_copy_manager(mut self, copy_manager: SharedCopyConstraintManager<F>) -> Self {
+        self.core.set_copy_manager(copy_manager);
+        self
+    }
+
     pub fn unknown(mut self, use_unknown: bool) -> Self {
-        self.gate_builder = self.gate_builder.unknown(use_unknown);
+        self.core = self.core.unknown(use_unknown);
         self
     }
 
     pub fn main(&mut self) -> &mut Context<F> {
-        self.gate_builder.main(FIRST_PHASE)
+        self.core.main(FIRST_PHASE)
     }
 
     pub fn witness_gen_only(&self) -> bool {
-        self.gate_builder.witness_gen_only()
+        self.core.witness_gen_only()
     }
 
     pub fn use_unknown(&self) -> bool {
-        self.gate_builder.use_unknown()
+        self.core.use_unknown()
     }
 
     pub fn thread_count(&self) -> usize {
-        self.gate_builder.thread_count()
+        self.core.phase_manager[0].thread_count()
     }
 
     pub fn get_new_thread_id(&mut self) -> usize {
-        self.gate_builder.get_new_thread_id()
+        self.core.phase_manager[0].thread_count()
     }
 
-    pub fn config(&self, k: usize, minimum_rows: Option<usize>) -> FlexGateConfigParams {
-        self.gate_builder.config(k, minimum_rows)
-    }
-
-    pub fn assign_all(
-        &mut self,
-        gate: &FlexGateConfig<F>,
-        lookup_advice: &[Vec<Column<Advice>>],
-        q_lookup: &[Option<Selector>],
-        spread: &SpreadConfig<F>,
-        region: &mut Region<'_, F>,
-        KeygenAssignments {
-            mut assigned_advices,
-            assigned_constants,
-            break_points,
-        }: KeygenAssignments<F>,
-    ) -> Result<KeygenAssignments<F>, Error> {
-        assert!(!self.witness_gen_only());
-
-        assign_threads_sha(
-            &self.threads_dense,
-            &self.threads_spread,
-            spread,
-            region,
-            self.use_unknown(),
-            Some(&mut assigned_advices),
-        );
-        // in order to constrain equalities and assign constants, we copy the Spread/Dense equality constraints into the gate builder (it doesn't matter which context the equalities are in), so `GateThreadBuilder::assign_all` can take care of it
-        // the phase doesn't matter for equality constraints, so we use phase 0 since we're sure there's a main context there
-        let main_ctx = self.gate_builder.main(0);
-        for ctx in self
-            .threads_spread
-            .iter_mut()
-            .chain(self.threads_dense.iter_mut())
-        {
-            main_ctx
-                .advice_equality_constraints
-                .append(&mut ctx.advice_equality_constraints);
-            main_ctx
-                .constant_equality_constraints
-                .append(&mut ctx.constant_equality_constraints);
-        }
-
-        Ok(self.gate_builder.assign_all(
-            gate,
-            lookup_advice,
-            q_lookup,
-            region,
-            KeygenAssignments {
-                assigned_advices,
-                assigned_constants,
-                break_points,
-            },
-        ))
-    }
-
-    pub fn assign_witnesses(
-        &mut self,
-        gate: &FlexGateConfig<F>,
-        lookup_advice: &[Vec<Column<Advice>>],
-        spread: &SpreadConfig<F>,
-        region: &mut Region<F>,
-        break_points: &mut MultiPhaseThreadBreakPoints,
-    ) -> Result<(), Error> {
-        let break_points_gate = mem::take(&mut break_points[FIRST_PHASE]);
-        // warning: we currently take all contexts from phase 0, which means you can't read the values
-        // from these contexts later in phase 1. If we want to read, should clone here
-        let threads = mem::take(&mut self.gate_builder.threads[FIRST_PHASE]);
-
-        assign_threads_in(
-            FIRST_PHASE,
-            threads,
-            gate,
-            &lookup_advice[FIRST_PHASE],
-            region,
-            break_points_gate,
-        );
-
-        let threads_dense = mem::take(&mut self.threads_dense);
-        let threads_spread = mem::take(&mut self.threads_spread);
-
-        assign_threads_sha(&threads_dense, &threads_spread, spread, region, false, None);
-
-        Ok(())
+    pub fn calculate_params(&self, k: usize, minimum_rows: Option<usize>) -> FlexGateConfigParams {
+        self.core.calculate_params(k, minimum_rows)
     }
 }
 
-impl<F: ScalarField> ShaThreadBuilder<F> {
+impl<F: BigPrimeField> VirtualRegionManager<F> for ShaThreadBuilder<F> {
+    type Config = (Vec<BasicGateConfig<F>>, SpreadConfig<F>, usize); // usize = usable_rows
+
+    fn assign_raw(&self, (gate, spread, usable_rows): &Self::Config, region: &mut Region<F>) {
+        self.core.phase_manager[0].assign_raw(&(gate.clone(), *usable_rows), region);
+
+        if self.core.witness_gen_only() {
+            let mut copy_manager = self.core.copy_manager.lock().unwrap();
+
+            assign_threads_sha(
+                &self.threads_dense,
+                &self.threads_spread,
+                spread,
+                region,
+                self.use_unknown(),
+                Some(&mut copy_manager),
+            );
+            // // in order to constrain equalities and assign constants, we copy the Spread/Dense equality constraints into the gate builder (it doesn't matter which context the equalities are in), so `GateThreadBuilder::assign_all` can take care of it
+            // // the phase doesn't matter for equality constraints, so we use phase 0 since we're sure there's a main context there
+            // let main_ctx = self.core.main();
+            // for ctx in self
+            //     .threads_spread
+            //     .iter_mut()
+            //     .chain(self.threads_dense.iter_mut())
+            // {
+            //     copy_manager
+            //         .advice_equalities
+            //         .append(&mut ctx.);
+            //     main_ctx
+            //         .constant_equality_constraints
+            //         .append(&mut ctx.constant_equality_constraints);
+            // }
+        } else {
+            assign_threads_sha(
+                &self.threads_dense,
+                &self.threads_spread,
+                spread,
+                region,
+                false,
+                None,
+            );
+        }
+    }
+}
+
+impl<F: BigPrimeField> ShaThreadBuilder<F> {
     pub fn sha_contexts_pair(&mut self) -> (&mut Context<F>, ShaContexts<F>) {
         if self.threads_dense.is_empty() {
             self.new_thread_dense();
@@ -180,7 +149,7 @@ impl<F: ScalarField> ShaThreadBuilder<F> {
             self.new_thread_spread();
         }
         (
-            self.gate_builder.main(FIRST_PHASE),
+            self.core.main(FIRST_PHASE),
             (
                 self.threads_dense.last_mut().unwrap(),
                 self.threads_spread.last_mut().unwrap(),
@@ -190,15 +159,25 @@ impl<F: ScalarField> ShaThreadBuilder<F> {
 
     pub fn new_thread_dense(&mut self) -> &mut Context<F> {
         let thread_id = self.get_new_thread_id();
-        self.threads_dense
-            .push(Context::new(self.witness_gen_only(), thread_id));
+        self.threads_dense.push(Context::new(
+            self.witness_gen_only(),
+            FIRST_PHASE,
+            self.core.phase_manager[0].type_of(),
+            thread_id,
+            self.core.copy_manager.clone(),
+        ));
         self.threads_dense.last_mut().unwrap()
     }
 
     pub fn new_thread_spread(&mut self) -> &mut Context<F> {
         let thread_id = self.get_new_thread_id();
-        self.threads_spread
-            .push(Context::new(self.witness_gen_only(), thread_id));
+        self.threads_spread.push(Context::new(
+            self.witness_gen_only(),
+            FIRST_PHASE,
+            self.core.phase_manager[0].type_of(),
+            thread_id,
+            self.core.copy_manager.clone(),
+        ));
         self.threads_spread.last_mut().unwrap()
     }
 }
@@ -206,13 +185,13 @@ impl<F: ScalarField> ShaThreadBuilder<F> {
 /// Pure advice witness assignment in a single phase. Uses preprocessed `break_points` to determine when
 /// to split a thread into a new column.
 #[allow(clippy::type_complexity)]
-pub fn assign_threads_sha<F: ScalarField>(
+pub fn assign_threads_sha<F: BigPrimeField>(
     threads_dense: &[Context<F>],
     threads_spread: &[Context<F>],
     spread: &SpreadConfig<F>,
-    region: &mut Region<'_, F>,
+    region: &mut Region<F>,
     use_unknown: bool,
-    mut assigned_advices: Option<&mut HashMap<(usize, usize), (circuit::Cell, usize)>>,
+    mut copy_manager: Option<&mut CopyConstraintManager<F>>,
 ) {
     let mut num_limb_sum = 0;
     let mut row_offset = 0;
@@ -240,8 +219,11 @@ pub fn assign_threads_sha<F: ScalarField>(
                 .unwrap()
                 .cell();
 
-            if let Some(assigned_advices) = assigned_advices.as_mut() {
-                assigned_advices.insert((ctx_dense.context_id, i), (cell_dense, row_offset));
+            if let Some(copy_manager) = copy_manager.as_mut() {
+                copy_manager.assigned_advices.insert(
+                    ContextCell::new(ctx_dense.type_id(), ctx_dense.id(), i),
+                    cell_dense,
+                );
             }
 
             let value_spread = if use_unknown {
@@ -260,8 +242,11 @@ pub fn assign_threads_sha<F: ScalarField>(
                 .unwrap()
                 .cell();
 
-            if let Some(assigned_advices) = assigned_advices.as_mut() {
-                assigned_advices.insert((ctx_spread.context_id, i), (cell_spread, row_offset));
+            if let Some(copy_manager) = copy_manager.as_mut() {
+                copy_manager.assigned_advices.insert(
+                    ContextCell::new(ctx_spread.type_id(), ctx_spread.id(), i),
+                    cell_spread,
+                );
             }
 
             num_limb_sum += 1;

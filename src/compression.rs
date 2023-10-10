@@ -3,7 +3,7 @@ use crate::gate::ShaThreadBuilder;
 use super::spread::SpreadChip;
 use crate::utils::{bits_le_to_fe, fe_to_bits_le};
 use halo2_base::halo2_proofs::plonk::Error;
-use halo2_base::utils::ScalarField;
+use halo2_base::utils::BigPrimeField;
 use halo2_base::QuantumCell;
 use halo2_base::{
     gates::{GateInstructions, RangeInstructions},
@@ -40,7 +40,7 @@ pub const INIT_STATE: [u32; NUM_STATE_WORD] = [
 
 pub type SpreadU32<'a, F> = (AssignedValue<F>, AssignedValue<F>);
 
-pub fn sha256_compression<'a, 'b: 'a, F: ScalarField>(
+pub fn sha256_compression<'a, 'b: 'a, F: BigPrimeField>(
     thread_pool: &mut ShaThreadBuilder<F>,
     spread_chip: &SpreadChip<'a, F>,
     assigned_input_bytes: &[AssignedValue<F>],
@@ -233,7 +233,7 @@ pub fn sha256_compression<'a, 'b: 'a, F: ScalarField>(
     Ok(next_state_words)
 }
 
-fn state_to_spread_u32<'a, F: ScalarField>(
+fn state_to_spread_u32<'a, F: BigPrimeField>(
     thread_pool: &mut ShaThreadBuilder<F>,
     spread_chip: &SpreadChip<'a, F>,
     x: &AssignedValue<F>,
@@ -255,14 +255,14 @@ fn state_to_spread_u32<'a, F: ScalarField>(
     Ok((lo_spread, hi_spread))
 }
 
-fn mod_u32<'a, 'b: 'a, F: ScalarField>(
+fn mod_u32<'a, 'b: 'a, F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &impl RangeInstructions<F>,
     x: &AssignedValue<F>,
 ) -> AssignedValue<F> {
     let gate = range.gate();
     let lo = F::from(x.value().get_lower_32() as u64);
-    let hi = F::from(((x.value().get_lower_128() >> 32) & ((1u128 << 32) - 1)) as u64);
+    let hi = F::from(((x.value().get_lower_64() >> 32) & ((1u64 << 32) - 1)) as u64);
     let assigned_lo = ctx.load_witness(lo);
     let assigned_hi = ctx.load_witness(hi);
     range.range_check(ctx, assigned_lo, 32);
@@ -276,7 +276,7 @@ fn mod_u32<'a, 'b: 'a, F: ScalarField>(
     assigned_lo
 }
 
-fn ch<'a, 'b: 'a, F: ScalarField>(
+fn ch<'a, 'b: 'a, F: BigPrimeField>(
     thread_pool: &mut ShaThreadBuilder<F>,
     spread_chip: &SpreadChip<'a, F>,
     x: &SpreadU32<'a, F>,
@@ -386,7 +386,7 @@ fn ch<'a, 'b: 'a, F: ScalarField>(
     Ok(out)
 }
 
-fn maj<'a, 'b: 'a, F: ScalarField>(
+fn maj<'a, 'b: 'a, F: BigPrimeField>(
     thread_pool: &mut ShaThreadBuilder<F>,
     spread_chip: &SpreadChip<'a, F>,
     x: &SpreadU32<'a, F>,
@@ -447,7 +447,7 @@ fn maj<'a, 'b: 'a, F: ScalarField>(
     Ok(m)
 }
 
-fn three_add<'a, 'b: 'a, F: ScalarField>(
+fn three_add<'a, 'b: 'a, F: BigPrimeField>(
     ctx: &mut Context<F>,
     gate: &impl GateInstructions<F>,
     x: QuantumCell<F>,
@@ -458,7 +458,7 @@ fn three_add<'a, 'b: 'a, F: ScalarField>(
     gate.add(ctx, QuantumCell::Existing(add1), z)
 }
 
-fn sigma_upper0<'a, 'b: 'a, F: ScalarField>(
+fn sigma_upper0<'a, 'b: 'a, F: BigPrimeField>(
     thread_pool: &mut ShaThreadBuilder<F>,
     spread_chip: &SpreadChip<'a, F>,
     x_spread: &SpreadU32<F>,
@@ -483,7 +483,7 @@ fn sigma_upper0<'a, 'b: 'a, F: ScalarField>(
     )
 }
 
-fn sigma_upper1<'a, 'b: 'a, F: ScalarField>(
+fn sigma_upper1<'a, 'b: 'a, F: BigPrimeField>(
     thread_pool: &mut ShaThreadBuilder<F>,
     spread_chip: &SpreadChip<'a, F>,
     x_spread: &SpreadU32<F>,
@@ -508,7 +508,7 @@ fn sigma_upper1<'a, 'b: 'a, F: ScalarField>(
     )
 }
 
-fn sigma_lower0<'a, 'b: 'a, F: ScalarField>(
+fn sigma_lower0<'a, 'b: 'a, F: BigPrimeField>(
     thread_pool: &mut ShaThreadBuilder<F>,
     spread_chip: &SpreadChip<'a, F>,
     x_spread: &SpreadU32<F>,
@@ -533,7 +533,7 @@ fn sigma_lower0<'a, 'b: 'a, F: ScalarField>(
     )
 }
 
-fn sigma_lower1<'a, 'b: 'a, F: ScalarField>(
+fn sigma_lower1<'a, 'b: 'a, F: BigPrimeField>(
     thread_pool: &mut ShaThreadBuilder<F>,
     spread_chip: &SpreadChip<'a, F>,
     x_spread: &SpreadU32<F>,
@@ -559,7 +559,7 @@ fn sigma_lower1<'a, 'b: 'a, F: ScalarField>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn sigma_generic<'a, 'b: 'a, F: ScalarField>(
+fn sigma_generic<'a, 'b: 'a, F: BigPrimeField>(
     thread_pool: &mut ShaThreadBuilder<F>,
     spread_chip: &SpreadChip<'a, F>,
     x_spread: &SpreadU32<F>,
@@ -659,7 +659,7 @@ fn sigma_generic<'a, 'b: 'a, F: ScalarField>(
     };
     let (r_lo, r_hi) = {
         let lo = F::from(r_spread.value().get_lower_32() as u64);
-        let hi = F::from(((r_spread.value().get_lower_128() >> 32) & ((1u128 << 32) - 1)) as u64);
+        let hi = F::from(((r_spread.value().get_lower_64() >> 32) & ((1u64 << 32) - 1)) as u64);
         let assigned_lo = thread_pool.main().load_witness(lo);
         let assigned_hi = thread_pool.main().load_witness(hi);
         range.range_check(thread_pool.main(), assigned_lo, 32);

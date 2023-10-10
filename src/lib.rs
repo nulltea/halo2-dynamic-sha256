@@ -9,9 +9,9 @@ pub use compression::*;
 
 use gate::ShaThreadBuilder;
 use generic_array::GenericArray;
+use halo2_base::gates::{RangeChip, RangeInstructions};
 use halo2_base::halo2_proofs::plonk::Error;
-use halo2_base::safe_types::{RangeChip, RangeInstructions};
-use halo2_base::utils::ScalarField;
+use halo2_base::utils::BigPrimeField;
 use halo2_base::QuantumCell;
 use halo2_base::{gates::GateInstructions, AssignedValue};
 use itertools::Itertools;
@@ -23,17 +23,17 @@ use spread::{SpreadChip, SpreadConfig};
 // const DIGEST_SIZE: usize = 32;
 
 #[derive(Debug, Clone)]
-pub struct AssignedHashResult<F: ScalarField> {
+pub struct AssignedHashResult<F: BigPrimeField> {
     pub input_len: AssignedValue<F>,
     pub input_bytes: Vec<AssignedValue<F>>,
     pub output_bytes: [AssignedValue<F>; 32],
 }
 
-pub struct Sha256Chip<'a, F: ScalarField> {
+pub struct Sha256Chip<'a, F: BigPrimeField> {
     spread: SpreadChip<'a, F>,
 }
 
-impl<'a, F: ScalarField> Sha256Chip<'a, F> {
+impl<'a, F: BigPrimeField> Sha256Chip<'a, F> {
     const ONE_ROUND_INPUT_BYTES: usize = 64;
 
     pub fn new(range: &'a RangeChip<F>) -> Self {
@@ -141,7 +141,7 @@ impl<'a, F: ScalarField> Sha256Chip<'a, F> {
         );
         let padding_is_less_than_round =
             range.is_less_than_safe(thread_pool.main(), padding_size, one_round_size as u64);
-        gate.assert_is_const(thread_pool.main(), &padding_is_less_than_round, &F::one());
+        gate.assert_is_const(thread_pool.main(), &padding_is_less_than_round, &F::ONE);
         let assigned_precomputed_round = thread_pool
             .main()
             .load_witness(F::from(precomputed_round as u64));
@@ -255,39 +255,31 @@ impl<'a, F: ScalarField> Sha256Chip<'a, F> {
 
 #[cfg(test)]
 mod test {
-    use std::marker::PhantomData;
-
     use crate::circuit::ShaCircuitBuilder;
 
     use super::*;
-    use halo2_base::halo2_proofs::{
-        circuit::{Cell, Layouter, Region, SimpleFloorPlanner},
-        dev::MockProver,
-        halo2curves::bn256::Fr,
-        plonk::{Circuit, ConstraintSystem, Instance},
+    use halo2_base::{
+        halo2_proofs::{dev::MockProver, halo2curves::bn256::Fr},
+        utils::BigPrimeField,
     };
-    use halo2_base::{gates::range::RangeStrategy::Vertical, SKIP_FIRST_PASS};
 
-    use num_bigint::RandomBits;
-    use rand::rngs::OsRng;
     use rand::{thread_rng, Rng};
     use sha2::{Digest, Sha256};
 
     const MAX_BYTE_SIZE1: usize = 128;
     const MAX_BYTE_SIZE2: usize = 128;
 
-    fn test_circuit<F: ScalarField>(
-        k: u32,
-        builder: &mut ShaThreadBuilder<F>,
+    fn test_circuit<F: BigPrimeField>(
+        builder: &mut ShaCircuitBuilder<F>,
         input_vector: &[Vec<u8>],
         // precomputed_input_lens: Vec<usize>,
     ) -> Result<Vec<u8>, Error> {
         let mut output_bytes = vec![];
-        let range = RangeChip::default(8);
+        let range = builder.range_chip(8);
         let sha256 = Sha256Chip::new(&range);
 
         let result0 = sha256.digest::<MAX_BYTE_SIZE1>(
-            builder,
+            builder.core_mut(),
             &input_vector[0],
             // Some(precomputed_input_lens[0]),
             true,
@@ -300,7 +292,7 @@ mod test {
                 .collect(),
         );
         let result1 = sha256.digest::<MAX_BYTE_SIZE2>(
-            builder,
+            builder.core_mut(),
             &input_vector[1],
             // Some(precomputed_input_lens[1]),
             true,
@@ -313,7 +305,7 @@ mod test {
                 .collect(),
         );
 
-        builder.config(k as usize, None);
+        builder.calculate_params(None);
 
         Ok(output_bytes)
     }
@@ -325,12 +317,9 @@ mod test {
         // Test vector: "abc"
         let test_input = vec!['a' as u8, 'b' as u8, 'c' as u8];
 
-        let mut builder = ShaThreadBuilder::<Fr>::mock();
+        let mut circuit = ShaCircuitBuilder::<Fr>::mock().use_k(k);
 
-        let output_bytes =
-            test_circuit(k, &mut builder, &[test_input, vec![]]).unwrap();
-
-        let circuit = ShaCircuitBuilder::mock(builder);
+        let output_bytes = test_circuit(&mut circuit, &[test_input, vec![]]).unwrap();
 
         let test_output0: [u8; 32] = [
             0b10111010, 0b01111000, 0b00010110, 0b10111111, 0b10001111, 0b00000001, 0b11001111,
@@ -342,13 +331,13 @@ mod test {
         let test_output1 =
             hex::decode("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
                 .unwrap();
-        let test_output = vec![test_output0.to_vec(), test_output1]
+        let test_output = [test_output0.to_vec(), test_output1]
             .concat()
             .into_iter()
             // .map(|val| Fr::from_u128(val as u128))
             .collect_vec();
 
-        let prover = MockProver::run(k, &circuit, vec![]).unwrap();
+        let prover = MockProver::run(k as u32, &circuit, vec![]).unwrap();
         assert_eq!(prover.verify(), Ok(()));
 
         assert_eq!(output_bytes, test_output);
@@ -360,12 +349,10 @@ mod test {
 
         // Test vector: "0x0"
         let test_input = vec![0u8];
-        let mut builder = ShaThreadBuilder::<Fr>::mock();
 
-        let output_bytes =
-            test_circuit(k, &mut builder, &[test_input, vec![]]).unwrap();
+        let mut circuit = ShaCircuitBuilder::<Fr>::mock().use_k(k);
 
-        let circuit = ShaCircuitBuilder::mock(builder);
+        let output_bytes = test_circuit(&mut circuit, &[test_input, vec![]]).unwrap();
 
         let test_output0 =
             hex::decode("6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d")
@@ -379,7 +366,7 @@ mod test {
             // .map(|val| Fr::from_u128(val as u128))
             .collect_vec();
 
-        let prover = MockProver::run(k, &circuit, vec![]).unwrap();
+        let prover = MockProver::run(k as u32, &circuit, vec![]).unwrap();
         assert_eq!(prover.verify(), Ok(()));
 
         assert_eq!(output_bytes, test_output);
@@ -390,11 +377,10 @@ mod test {
         let k = 17;
 
         let test_inputs = vec![vec![0x1; 56], vec![0u8, 0u8, 0u8]];
-        let mut builder = ShaThreadBuilder::<Fr>::mock();
 
-        let output_bytes = test_circuit(k, &mut builder, &test_inputs).unwrap();
+        let mut circuit = ShaCircuitBuilder::<Fr>::mock().use_k(k);
 
-        let circuit = ShaCircuitBuilder::mock(builder);
+        let output_bytes = test_circuit(&mut circuit, &test_inputs).unwrap();
 
         let test_output0 =
             hex::decode("51e14a913680f24c85fe3b0e2e5b57f7202f117bb214f8ffdd4ea0f4e921fd52")
@@ -407,7 +393,7 @@ mod test {
             .into_iter()
             // .map(|val| Fr::from_u128(val as u128))
             .collect_vec();
-        let prover = MockProver::run(k, &circuit, vec![]).unwrap();
+        let prover = MockProver::run(k as u32, &circuit, vec![]).unwrap();
         assert_eq!(prover.verify(), Ok(()));
 
         assert_eq!(output_bytes, test_output);
@@ -426,16 +412,16 @@ mod test {
         let test_output1 = Sha256::digest(&test_inputs[1]);
         let mut builder = ShaThreadBuilder::<Fr>::mock();
 
-        let output_bytes = test_circuit(k, &mut builder, &test_inputs).unwrap();
+        let mut circuit = ShaCircuitBuilder::<Fr>::mock();
 
-        let circuit = ShaCircuitBuilder::mock(builder);
+        let output_bytes = test_circuit(&mut circuit, &test_inputs).unwrap();
 
         let test_output = vec![test_output0, test_output1]
             .concat()
             .into_iter()
             // .map(|val| Fr::from_u128(val as u128))
             .collect_vec();
-        let prover = MockProver::run(k, &circuit, vec![]).unwrap();
+        let prover = MockProver::run(k as u32, &circuit, vec![]).unwrap();
         assert_eq!(prover.verify(), Ok(()));
 
         assert_eq!(output_bytes, test_output);

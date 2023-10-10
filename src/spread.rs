@@ -1,11 +1,10 @@
 use std::marker::PhantomData;
 
-use halo2_base::halo2_proofs::{
+use halo2_base::{halo2_proofs::{
     circuit::{Layouter, Region, Value},
     plonk::{Advice, Column, ConstraintSystem, Error, TableColumn},
     poly::Rotation,
-};
-use halo2_base::safe_types::RangeChip;
+}, gates::RangeChip, utils::BigPrimeField};
 use halo2_base::utils::{decompose, ScalarField};
 use halo2_base::QuantumCell;
 use halo2_base::{
@@ -18,7 +17,7 @@ use crate::gate::ShaThreadBuilder;
 use crate::utils::{bits_le_to_fe, fe_to_bits_le};
 
 #[derive(Debug, Clone)]
-pub struct SpreadConfig<F: ScalarField> {
+pub struct SpreadConfig<F: BigPrimeField> {
     pub denses: Vec<Column<Advice>>,
     pub spreads: Vec<Column<Advice>>,
     pub table_dense: TableColumn,
@@ -28,7 +27,7 @@ pub struct SpreadConfig<F: ScalarField> {
     _f: PhantomData<F>,
 }
 
-impl<F: ScalarField> SpreadConfig<F> {
+impl<F: BigPrimeField> SpreadConfig<F> {
     pub fn configure(
         meta: &mut ConstraintSystem<F>,
         num_bits_lookup: usize,
@@ -118,7 +117,7 @@ pub struct SpreadChip<'a, F: ScalarField> {
     range: &'a RangeChip<F>,
 }
 
-impl<'a, F: ScalarField> SpreadChip<'a, F> {
+impl<'a, F: BigPrimeField> SpreadChip<'a, F> {
     pub fn new(range: &'a RangeChip<F>) -> Self {
         debug_assert_eq!(16 % range.lookup_bits(), 0);
 
