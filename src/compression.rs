@@ -1,4 +1,5 @@
-use crate::gate::ShaThreadBuilder;
+use crate::circuit::ShaCircuitBuilder;
+
 
 use super::spread::SpreadChip;
 use crate::utils::{bits_le_to_fe, fe_to_bits_le};
@@ -41,7 +42,7 @@ pub const INIT_STATE: [u32; NUM_STATE_WORD] = [
 pub type SpreadU32<'a, F> = (AssignedValue<F>, AssignedValue<F>);
 
 pub fn sha256_compression<'a, 'b: 'a, F: BigPrimeField>(
-    thread_pool: &mut ShaThreadBuilder<F>,
+    thread_pool: &mut ShaCircuitBuilder<F>,
     spread_chip: &SpreadChip<'a, F>,
     assigned_input_bytes: &[AssignedValue<F>],
     pre_state_words: &[AssignedValue<F>],
@@ -234,7 +235,7 @@ pub fn sha256_compression<'a, 'b: 'a, F: BigPrimeField>(
 }
 
 fn state_to_spread_u32<'a, F: BigPrimeField>(
-    thread_pool: &mut ShaThreadBuilder<F>,
+    thread_pool: &mut ShaCircuitBuilder<F>,
     spread_chip: &SpreadChip<'a, F>,
     x: &AssignedValue<F>,
 ) -> Result<SpreadU32<'a, F>, Error> {
@@ -277,7 +278,7 @@ fn mod_u32<'a, 'b: 'a, F: BigPrimeField>(
 }
 
 fn ch<'a, 'b: 'a, F: BigPrimeField>(
-    thread_pool: &mut ShaThreadBuilder<F>,
+    thread_pool: &mut ShaCircuitBuilder<F>,
     spread_chip: &SpreadChip<'a, F>,
     x: &SpreadU32<'a, F>,
     y: &SpreadU32<'a, F>,
@@ -387,7 +388,7 @@ fn ch<'a, 'b: 'a, F: BigPrimeField>(
 }
 
 fn maj<'a, 'b: 'a, F: BigPrimeField>(
-    thread_pool: &mut ShaThreadBuilder<F>,
+    thread_pool: &mut ShaCircuitBuilder<F>,
     spread_chip: &SpreadChip<'a, F>,
     x: &SpreadU32<'a, F>,
     y: &SpreadU32<'a, F>,
@@ -459,7 +460,7 @@ fn three_add<'a, 'b: 'a, F: BigPrimeField>(
 }
 
 fn sigma_upper0<'a, 'b: 'a, F: BigPrimeField>(
-    thread_pool: &mut ShaThreadBuilder<F>,
+    thread_pool: &mut ShaCircuitBuilder<F>,
     spread_chip: &SpreadChip<'a, F>,
     x_spread: &SpreadU32<F>,
 ) -> Result<AssignedValue<F>, Error> {
@@ -484,7 +485,7 @@ fn sigma_upper0<'a, 'b: 'a, F: BigPrimeField>(
 }
 
 fn sigma_upper1<'a, 'b: 'a, F: BigPrimeField>(
-    thread_pool: &mut ShaThreadBuilder<F>,
+    thread_pool: &mut ShaCircuitBuilder<F>,
     spread_chip: &SpreadChip<'a, F>,
     x_spread: &SpreadU32<F>,
 ) -> Result<AssignedValue<F>, Error> {
@@ -509,7 +510,7 @@ fn sigma_upper1<'a, 'b: 'a, F: BigPrimeField>(
 }
 
 fn sigma_lower0<'a, 'b: 'a, F: BigPrimeField>(
-    thread_pool: &mut ShaThreadBuilder<F>,
+    thread_pool: &mut ShaCircuitBuilder<F>,
     spread_chip: &SpreadChip<'a, F>,
     x_spread: &SpreadU32<F>,
 ) -> Result<AssignedValue<F>, Error> {
@@ -534,7 +535,7 @@ fn sigma_lower0<'a, 'b: 'a, F: BigPrimeField>(
 }
 
 fn sigma_lower1<'a, 'b: 'a, F: BigPrimeField>(
-    thread_pool: &mut ShaThreadBuilder<F>,
+    thread_pool: &mut ShaCircuitBuilder<F>,
     spread_chip: &SpreadChip<'a, F>,
     x_spread: &SpreadU32<F>,
 ) -> Result<AssignedValue<F>, Error> {
@@ -560,7 +561,7 @@ fn sigma_lower1<'a, 'b: 'a, F: BigPrimeField>(
 
 #[allow(clippy::too_many_arguments)]
 fn sigma_generic<'a, 'b: 'a, F: BigPrimeField>(
-    thread_pool: &mut ShaThreadBuilder<F>,
+    thread_pool: &mut ShaCircuitBuilder<F>,
     spread_chip: &SpreadChip<'a, F>,
     x_spread: &SpreadU32<F>,
     starts: &[usize; 4],

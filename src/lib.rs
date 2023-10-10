@@ -5,6 +5,7 @@ pub(crate) mod spread;
 pub(crate) mod utils;
 use std::convert::TryInto;
 
+use circuit::ShaCircuitBuilder;
 pub use compression::*;
 
 use gate::ShaThreadBuilder;
@@ -44,7 +45,7 @@ impl<'a, F: BigPrimeField> Sha256Chip<'a, F> {
 
     pub fn digest<const MAX_INPUT_SIZE: usize>(
         &self,
-        thread_pool: &mut ShaThreadBuilder<F>,
+        thread_pool: &mut ShaCircuitBuilder<F>,
         input: &'a [u8],
         // precomputed_input_len: Option<usize>,
         strict: bool,
@@ -64,7 +65,7 @@ impl<'a, F: BigPrimeField> Sha256Chip<'a, F> {
 
     pub fn digest_assigned<const MAX_INPUT_SIZE: usize>(
         &self,
-        thread_pool: &mut ShaThreadBuilder<F>,
+        thread_pool: &mut ShaCircuitBuilder<F>,
         input: Vec<AssignedValue<F>>,
         precomputed_input_len: Option<usize>,
         strict: bool,
@@ -279,7 +280,7 @@ mod test {
         let sha256 = Sha256Chip::new(&range);
 
         let result0 = sha256.digest::<MAX_BYTE_SIZE1>(
-            builder.core_mut(),
+            builder,
             &input_vector[0],
             // Some(precomputed_input_lens[0]),
             true,
@@ -292,7 +293,7 @@ mod test {
                 .collect(),
         );
         let result1 = sha256.digest::<MAX_BYTE_SIZE2>(
-            builder.core_mut(),
+            builder,
             &input_vector[1],
             // Some(precomputed_input_lens[1]),
             true,

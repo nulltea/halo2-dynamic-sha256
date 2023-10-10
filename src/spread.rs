@@ -1,19 +1,23 @@
 use std::marker::PhantomData;
 
-use halo2_base::{halo2_proofs::{
-    circuit::{Layouter, Region, Value},
-    plonk::{Advice, Column, ConstraintSystem, Error, TableColumn},
-    poly::Rotation,
-}, gates::RangeChip, utils::BigPrimeField};
 use halo2_base::utils::{decompose, ScalarField};
 use halo2_base::QuantumCell;
+use halo2_base::{
+    gates::RangeChip,
+    halo2_proofs::{
+        circuit::{Layouter, Region, Value},
+        plonk::{Advice, Column, ConstraintSystem, Error, TableColumn},
+        poly::Rotation,
+    },
+    utils::BigPrimeField,
+};
 use halo2_base::{
     gates::{GateInstructions, RangeInstructions},
     AssignedValue, Context,
 };
 use itertools::Itertools;
 
-use crate::gate::ShaThreadBuilder;
+use crate::circuit::ShaCircuitBuilder;
 use crate::utils::{bits_le_to_fe, fe_to_bits_le};
 
 #[derive(Debug, Clone)]
@@ -125,7 +129,7 @@ impl<'a, F: BigPrimeField> SpreadChip<'a, F> {
     }
     pub fn spread(
         &self,
-        thread_pool: &mut ShaThreadBuilder<F>,
+        thread_pool: &mut ShaCircuitBuilder<F>,
         dense: &AssignedValue<F>,
     ) -> Result<AssignedValue<F>, Error> {
         let gate = self.range.gate();
@@ -178,7 +182,7 @@ impl<'a, F: BigPrimeField> SpreadChip<'a, F> {
 
     fn spread_limb(
         &self,
-        thread_pool: &mut ShaThreadBuilder<F>,
+        thread_pool: &mut ShaCircuitBuilder<F>,
         limb: &AssignedValue<F>,
     ) -> Result<AssignedValue<F>, Error> {
         let (ctx_base, (ctx_dense, ctx_spread)) = thread_pool.sha_contexts_pair();
@@ -195,9 +199,7 @@ impl<'a, F: BigPrimeField> SpreadChip<'a, F> {
 
         let assigned_spread = ctx_base.load_witness(spread_value);
         let assigned_spread_vanila = ctx_spread.load_witness(*assigned_spread.value());
-        thread_pool
-            .main()
-            .constrain_equal(&assigned_spread_vanila, &assigned_spread);
+        ctx_base.constrain_equal(&assigned_spread_vanila, &assigned_spread);
 
         Ok(assigned_spread)
     }

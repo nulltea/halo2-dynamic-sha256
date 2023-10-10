@@ -1,4 +1,4 @@
-use halo2_base::utils::{biguint_to_fe, fe_to_biguint, BigPrimeField, ScalarField};
+use halo2_base::utils::{biguint_to_fe, fe_to_biguint, BigPrimeField};
 use itertools::*;
 use num_bigint::BigUint;
 
