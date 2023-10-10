@@ -137,6 +137,8 @@ impl<F: BigPrimeField> VirtualRegionManager<F> for ShaThreadBuilder<F> {
     type Config = SpreadConfig<F>;
 
     fn assign_raw(&self, spread: &Self::Config, region: &mut Region<F>) {
+        spread.annotate_columns_in_region(region);
+        
         if self.witness_gen_only() {
             assign_threads_sha(
                 &self.threads_dense,

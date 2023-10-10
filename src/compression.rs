@@ -211,7 +211,7 @@ pub fn sha256_compression<'a, 'b: 'a, F: BigPrimeField>(
         };
         a_spread = state_to_spread_u32(thread_pool, spread_chip, &a)?;
     }
-    let new_states = vec![a, b, c, d, e, f, g, h];
+    let new_states = [a, b, c, d, e, f, g, h];
     let next_state_words = new_states
         .iter()
         .copied()

@@ -8,7 +8,7 @@ use std::convert::TryInto;
 use circuit::ShaCircuitBuilder;
 pub use compression::*;
 
-use gate::ShaThreadBuilder;
+
 use generic_array::GenericArray;
 use halo2_base::gates::{RangeChip, RangeInstructions};
 use halo2_base::halo2_proofs::plonk::Error;
@@ -143,14 +143,14 @@ impl<'a, F: BigPrimeField> Sha256Chip<'a, F> {
         let padding_is_less_than_round =
             range.is_less_than_safe(thread_pool.main(), padding_size, one_round_size as u64);
         gate.assert_is_const(thread_pool.main(), &padding_is_less_than_round, &F::ONE);
-        let assigned_precomputed_round = thread_pool
-            .main()
-            .load_witness(F::from(precomputed_round as u64));
-        let assigned_target_round = gate.sub(
-            thread_pool.main(),
-            assigned_num_round,
-            assigned_precomputed_round,
-        );
+        // let assigned_precomputed_round = thread_pool
+        //     .main()
+        //     .load_witness(F::from(precomputed_round as u64));
+        // let assigned_target_round = gate.sub(
+        //     thread_pool.main(),
+        //     assigned_num_round,
+        //     assigned_precomputed_round,
+        // );
 
         let assigned_num_round = thread_pool.main().load_witness(F::from(num_round as u64));
 
@@ -248,10 +248,6 @@ impl<'a, F: BigPrimeField> Sha256Chip<'a, F> {
         };
         Ok(result)
     }
-
-    fn range(&self) -> &RangeChip<F> {
-        self.spread.range()
-    }
 }
 
 #[cfg(test)]
@@ -288,7 +284,7 @@ mod test {
         output_bytes.append(
             &mut result0
                 .output_bytes
-                .into_iter()
+                .iter()
                 .map(|v| v.value().get_lower_32() as u8)
                 .collect(),
         );
@@ -301,7 +297,7 @@ mod test {
         output_bytes.append(
             &mut result1
                 .output_bytes
-                .into_iter()
+                .iter()
                 .map(|v| v.value().get_lower_32() as u8)
                 .collect(),
         );
@@ -316,7 +312,7 @@ mod test {
         let k = 17;
 
         // Test vector: "abc"
-        let test_input = vec!['a' as u8, 'b' as u8, 'c' as u8];
+        let test_input = vec![b'a', b'b', b'c'];
 
         let mut circuit = ShaCircuitBuilder::<Fr>::mock().use_k(k);
 
@@ -361,7 +357,7 @@ mod test {
         let test_output1 =
             hex::decode("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
                 .unwrap();
-        let test_output = vec![test_output0, test_output1]
+        let test_output = [test_output0, test_output1]
             .concat()
             .into_iter()
             // .map(|val| Fr::from_u128(val as u128))
@@ -389,7 +385,7 @@ mod test {
         let test_output1 =
             hex::decode("709e80c88487a2411e1ee4dfb9f22a861492d20c4765150c0c794abd70f8147c")
                 .unwrap();
-        let test_output = vec![test_output0, test_output1]
+        let test_output = [test_output0, test_output1]
             .concat()
             .into_iter()
             // .map(|val| Fr::from_u128(val as u128))
@@ -411,13 +407,12 @@ mod test {
         let test_inputs = vec![gen_random_bytes(64), gen_random_bytes(64)];
         let test_output0 = Sha256::digest(&test_inputs[0]);
         let test_output1 = Sha256::digest(&test_inputs[1]);
-        let mut builder = ShaThreadBuilder::<Fr>::mock();
 
         let mut circuit = ShaCircuitBuilder::<Fr>::mock();
 
         let output_bytes = test_circuit(&mut circuit, &test_inputs).unwrap();
 
-        let test_output = vec![test_output0, test_output1]
+        let test_output = [test_output0, test_output1]
             .concat()
             .into_iter()
             // .map(|val| Fr::from_u128(val as u128))

@@ -56,7 +56,7 @@ impl<F: BigPrimeField> SpreadConfig<F> {
 
         let table_dense = meta.lookup_table_column();
         let table_spread = meta.lookup_table_column();
-        for (idx, (dense, spread)) in denses.iter().zip(spreads.iter()).enumerate() {
+        for (dense, spread) in denses.iter().zip(spreads.iter()) {
             meta.lookup("spread lookup", |meta| {
                 let dense = meta.query_advice(*dense, Rotation::cur());
                 let spread = meta.query_advice(*spread, Rotation::cur());
@@ -105,7 +105,7 @@ impl<F: BigPrimeField> SpreadConfig<F> {
         Ok(())
     }
 
-    fn annotate_columns_in_region(&self, region: &mut Region<F>) {
+    pub fn annotate_columns_in_region(&self, region: &mut Region<F>) {
         for (i, &column) in self.spreads.iter().enumerate() {
             region.name_column(|| format!("spread_{i}"), column);
         }

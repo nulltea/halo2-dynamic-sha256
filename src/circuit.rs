@@ -17,11 +17,9 @@ use halo2_base::{
 };
 
 use crate::{
-    gate::{ShaThreadBuilder, FIRST_PHASE, ShaContexts},
+    gate::{ShaContexts, ShaThreadBuilder, FIRST_PHASE},
     spread::SpreadConfig,
 };
-
-const MAX_PHASE: usize = 3;
 
 #[derive(Debug, Clone)]
 pub struct SHAConfig<F: BigPrimeField> {
@@ -31,11 +29,9 @@ pub struct SHAConfig<F: BigPrimeField> {
 
 impl<F: BigPrimeField> SHAConfig<F> {
     pub fn configure(meta: &mut ConstraintSystem<F>, params: BaseCircuitParams) -> Self {
-        let degree = params.k;
-        let mut base = BaseConfig::configure(meta, params);
+        let base = BaseConfig::configure(meta, params);
         let compression = SpreadConfig::configure(meta, 8, 1);
 
-        // base.gate.max_rows = (1 << degree) - meta.minimum_rows();
         Self { base, compression }
     }
 }
@@ -130,7 +126,7 @@ impl<F: BigPrimeField> ShaCircuitBuilder<F> {
 
     /// Returns [SinglePhaseCoreManager] with the virtual region with all core threads in the given phase.
     pub fn pool(&mut self, phase: usize) -> &mut SinglePhaseCoreManager<F> {
-        self.base.pool(0)
+        self.base.pool(phase)
     }
 
     pub fn calculate_params(&mut self, minimum_rows: Option<usize>) -> BaseCircuitParams {
@@ -164,7 +160,7 @@ impl<F: BigPrimeField> Circuit<F> for ShaCircuitBuilder<F> {
         SHAConfig::configure(meta, params)
     }
 
-    fn configure(meta: &mut ConstraintSystem<F>) -> SHAConfig<F> {
+    fn configure(_meta: &mut ConstraintSystem<F>) -> SHAConfig<F> {
         unreachable!("You must use configure_with_params");
     }
 
